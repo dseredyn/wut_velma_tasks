@@ -12,6 +12,7 @@ git clone https://github.com/dseredyn/wut_velma_gazebo.git
 git clone https://github.com/dseredyn/wut_velma_effort_controller.git
 git clone https://github.com/dseredyn/wut_velma_tasks.git
 git clone https://github.com/dseredyn/wut_gazebo_models.git
+git clone https://github.com/dseredyn/gazebo_pose.git
 ```
 
 Build:

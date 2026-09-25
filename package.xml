@@ -1,0 +1,39 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>wut_velma_tasks</name>
+  <version>0.0.1</version>
+  <description>Python scripts and programs for commanding WUT Velma.</description>
+
+  <maintainer email="dawid.seredynski@pw.edu.pl">Dawid Seredyński</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- Build / link deps -->
+  <depend>rclcpp</depend>
+  <depend>rclcpp_lifecycle</depend>
+  <depend>controller_interface</depend>
+  <depend>hardware_interface</depend>
+  <depend>pluginlib</depend>
+  <depend>realtime_tools</depend>
+  <depend>std_msgs</depend>
+  <depend>visualization_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>trajectory_msgs</depend>
+  <depend>tf2_ros</depend>
+
+  <depend>eigen3_cmake_module</depend>
+  <depend>eigen</depend>
+
+  <depend>kdl_parser</depend>
+  <depend>orocos_kdl</depend>
+  <depend>urdf</depend>
+
+  <depend>pinocchio</depend>
+
+  <depend>rcutils</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

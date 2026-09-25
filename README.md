@@ -15,7 +15,7 @@ git clone https://github.com/dseredyn/wut_velma_tasks.git
 
 Build:
 ```bash
-source /opt/ros/jazzy.setup.bash
+source /opt/ros/jazzy/setup.bash
 cd ~/ws_velma
 clear && python3 -m colcon build --symlink-install --cmake-args -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_BUILD_TYPE=RelWithDebInfo
 ```

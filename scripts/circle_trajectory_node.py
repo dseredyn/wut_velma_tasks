@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-continuous_ik_circle_trajectory_publisher.py
+circle_trajectory_node.py
 
 ROS 2 Jazzy node:
 - co 0.5 s publikuje nową trajektorię JointTrajectory,
@@ -16,7 +16,6 @@ Uruchamiaj razem z pełną konfiguracją MoveIt dla robota:
 robot_description, robot_description_semantic, kinematics.yaml itd.
 """
 
-import sys
 import time
 
 from rclpy.task import Future
@@ -24,7 +23,7 @@ from sensor_msgs.msg import JointState
 from rclpy.impl.rcutils_logger import RcutilsLogger
 
 from tf2_ros import Buffer, TransformListener
-from tf2_ros import TransformException
+from tf2_ros import TransformException # type: ignore
 
 import math
 from typing import Optional
@@ -43,6 +42,8 @@ from moveit.planning import MoveItPy, PlanningComponent, PlanRequestParameters, 
 from moveit.core.robot_state import RobotState
 from moveit.core.robot_model import RobotModel, JointModelGroup
 from moveit.core.planning_interface import MotionPlanResponse
+from moveit.core.controller_manager import ExecutionStatus
+from moveit.core.robot_trajectory import RobotTrajectory
 
 from rclpy.action import ActionClient
 from control_msgs.action import FollowJointTrajectory
@@ -51,22 +52,20 @@ from control_msgs.action import FollowJointTrajectory
 # constructor ContinuousIkCircleTrajectoryPublisher()
 #   - initialization
 #   - next state: state_move_to_initial_pose
-# state_move_to_initial_pose: startup_timer, 0.1
+# state_move_to_initial_pose: startup_timer, 0.1s
 #   - get current joint state
 #   - send action goal: move to the initial pose for trajectory execution
-#   - next state: action_traj_goal_cb
-# action_traj_goal_cb
-#   - 
+#   - next state: circular_trajectory
+# circular_trajectory: publish_timer, 0.5s
+#   - send a new 2s trajectory every 0.5s
 
-def plan_and_execute(
-    moveit:MoveItPy,
+def plan(
     planning_component:PlanningComponent,
     logger:RcutilsLogger,
     single_plan_parameters:Optional[PlanRequestParameters]=None,
     multi_plan_parameters:Optional[MultiPipelinePlanRequestParameters]=None,
-    sleep_time=0.0,
-):
-    """Helper function to plan and execute a motion."""
+) -> Optional[RobotTrajectory]:
+    """Helper function to plan a motion."""
     # plan to goal
     logger.info("Planning trajectory")
     if multi_plan_parameters is not None:
@@ -78,18 +77,61 @@ def plan_and_execute(
             single_plan_parameters=single_plan_parameters
         )
     else:
+        # https://docs.ros.org/en/noetic/api/moveit_core/html/structplanning__interface_1_1MotionPlanResponse.html
         plan_result:MotionPlanResponse = planning_component.plan()
 
-    # execute the plan
     if plan_result:
-        logger.info("Executing plan")
-        robot_trajectory = plan_result.trajectory
-        result = moveit.execute(robot_trajectory, controllers=[])
-        print(result)
+        logger.info("Trajectory is ready")
+        return plan_result.trajectory
     else:
-        logger.error("Planning failed")
+        logger.error(f'Planning failed: {plan_result.error_code}')
+        return None
 
-    time.sleep(sleep_time)
+
+def execute(
+    moveit:MoveItPy,
+    trajectory:RobotTrajectory,
+    logger:RcutilsLogger
+) -> bool:
+    """Helper function to execute a motion."""
+    logger.info("Executing trajectory")
+    # https://moveit.picknik.ai/main/api/html/structmoveit__controller__manager_1_1ExecutionStatus.html
+    result:ExecutionStatus = moveit.execute(trajectory, controllers=[])
+    logger.info( f'Execute status: "{result.status}"' )
+    return bool(result)
+
+
+# def plan_and_execute(
+#     moveit:MoveItPy,
+#     planning_component:PlanningComponent,
+#     logger:RcutilsLogger,
+#     single_plan_parameters:Optional[PlanRequestParameters]=None,
+#     multi_plan_parameters:Optional[MultiPipelinePlanRequestParameters]=None,
+# ):
+#     """Helper function to plan and execute a motion."""
+#     # plan to goal
+#     logger.info("Planning trajectory")
+#     if multi_plan_parameters is not None:
+#         plan_result:MotionPlanResponse = planning_component.plan(
+#             multi_plan_parameters=multi_plan_parameters
+#         )
+#     elif single_plan_parameters is not None:
+#         plan_result:MotionPlanResponse = planning_component.plan(
+#             single_plan_parameters=single_plan_parameters
+#         )
+#     else:
+#         plan_result:MotionPlanResponse = planning_component.plan()
+
+#     # execute the plan
+#     if plan_result:
+#         logger.info("Executing plan")
+#         robot_trajectory = plan_result.trajectory
+#         # https://moveit.picknik.ai/main/api/html/structmoveit__controller__manager_1_1ExecutionStatus.html
+#         result:ExecutionStatus = moveit.execute(robot_trajectory, controllers=[])
+#         logger.info( f'execute status: "{result.status}"' )
+#     else:
+#         logger.error("Planning failed")
+
 
 
 class ContinuousIkCircleTrajectoryPublisher(Node):
@@ -98,9 +140,10 @@ class ContinuousIkCircleTrajectoryPublisher(Node):
 
         # Topic: <controller_name>/joint_trajectory
         self.controller_topic = "/arms_torso_trajectory_controller/joint_trajectory"
+        self.joint_states_topic = "/joint_states"
 
         # Names are defined in the SRDF.
-        self.group_name = "left_arm_torso"
+        self.group_name = "left_arm"
         self.tip_link = "left_arm_7_link"
         self.base_frame = "torso_base"
 
@@ -116,23 +159,11 @@ class ContinuousIkCircleTrajectoryPublisher(Node):
         self.waypoint_dt = 0.1
         self.ik_timeout = 0.03
 
-        if self.horizon <= self.publish_period:
-            self.get_logger().warn(
-                "Parametr horizon powinien być większy niż publish_period, "
-                "żeby nowe trajektorie zachodziły na stare."
-            )
+        assert self.horizon > self.publish_period
+        assert self.waypoint_dt > 0.0
+        assert self.period > 0.0
+        assert self.radius > 0.0
 
-        if self.waypoint_dt <= 0.0:
-            raise ValueError("waypoint_dt musi być > 0")
-
-        if self.period <= 0.0:
-            raise ValueError("period musi być > 0")
-
-        if self.radius <= 0.0:
-            raise ValueError("radius musi być > 0")
-
-        self.joint_states_topic = "/joint_states"
-        self.max_initial_tcp_jump = 0.25    # TODO: remove
         self.startup_timeout = 10.0
 
         self.initialized_from_current_state = False
@@ -152,19 +183,7 @@ class ContinuousIkCircleTrajectoryPublisher(Node):
         self.robot_state = RobotState(self.robot_model)
         self.robot_state.set_to_default_values()
 
-        q0 = np.asarray(
-            self.robot_state.get_joint_group_positions(self.group_name),
-            dtype=float,
-        )
-
-        if len(self.joint_names) != len(q0):
-            raise RuntimeError(
-                f"Liczba joint_names ({len(self.joint_names)}) != "
-                f"liczba zmiennych grupy MoveIt ({len(q0)}). "
-                "Sprawdź planning_group albo parametr joint_names."
-            )
-
-        self.seed_for_next_publish: Optional[np.ndarray] = q0.copy()
+        self.seed_for_next_publish: Optional[np.ndarray] = None
 
         # Joint state subscriber
         self.sub_joint_state = self.create_subscription(
@@ -174,6 +193,7 @@ class ContinuousIkCircleTrajectoryPublisher(Node):
             50,
         )
 
+        # TF listener
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
@@ -184,9 +204,7 @@ class ContinuousIkCircleTrajectoryPublisher(Node):
             10,
         )
 
-        # self.act_cli_traj = ActionClient(self, FollowJointTrajectory, '/arms_torso_trajectory_controller/follow_joint_trajectory')
-
-        self.start_time:Time|None = None
+        self.start_time:Optional[Time] = None
 
         self.publish_timer = None
 
@@ -201,35 +219,21 @@ class ContinuousIkCircleTrajectoryPublisher(Node):
             f"tip_link='{self.tip_link}', joint_names={self.joint_names}"
         )
 
-    def execute_traj_action(self, traj:JointTrajectory):
-        goal_msg = FollowJointTrajectory.Goal()
-        goal_msg.trajectory = traj
-        # goal_msg.order = order
-
-        # self.act_cli_traj.wait_for_server()
-
-        # future:Future = self.act_cli_traj.send_goal_async(goal_msg)
-        # future.add_done_callback( self.action_traj_goal_cb )
-        raise Exception('Not implemented')
-
-    def plan_and_execute(self, robot_state:RobotState):
-        # TODO:
+    def plan_and_execute(self, robot_state:RobotState) -> bool:
         robot_arm:PlanningComponent = self.moveit.get_planning_component(self.group_name)
-
         robot_arm.set_start_state_to_current_state()
-
         robot_arm.set_goal_state(robot_state=robot_state)
 
         # plan to goal
-        self.get_logger().info('plan_and_execute begin')
         param = PlanRequestParameters(self.moveit, '')
         param.max_acceleration_scaling_factor = 0.2
         param.max_velocity_scaling_factor = 0.2
-        plan_and_execute(self.moveit, robot_arm, self.get_logger(), single_plan_parameters=param)
-        self.get_logger().info('plan_and_execute end')
-
-
-
+        trajectory = plan(robot_arm, self.get_logger(), single_plan_parameters=param)
+        if trajectory is None:
+            return False
+        else:
+            return execute(self.moveit, trajectory, self.get_logger())
+    
     def action_traj_goal_cb(self, future:Future):
         print('The trajectory is done')
         self.request_clean_stop('ok')
@@ -296,80 +300,43 @@ class ContinuousIkCircleTrajectoryPublisher(Node):
             return
 
         start_pose = self.desired_pose(0.0)
-        # start_tcp = np.array(
-        #     [
-        #         start_pose.position.x,
-        #         start_pose.position.y,
-        #         start_pose.position.z,
-        #     ],
-        #     dtype=float,
-        # )
 
-        # initial_tcp_jump = float(np.linalg.norm(start_tcp - current_tcp))
-
-        # if initial_tcp_jump > self.max_initial_tcp_jump:
-        #     self.request_clean_stop(
-        #         "Aktualna pozycja końcówki jest za daleko od punktu startowego okręgu. "
-        #         f"Odległość: {initial_tcp_jump:.4f} m, "
-        #         f"limit: {self.max_initial_tcp_jump:.4f} m. "
-        #         "Nie wysyłam trajektorii i kończę pracę."
-        #     )
-        #     return
-
-        # Najważniejsze: seed IK pochodzi z aktualnej konfiguracji robota.
-        self.seed_for_next_publish = current_q.copy()
-
-        # Dodatkowo ustaw stan MoveIt na bieżący q, żeby pierwsze IK preferowało
-        # aktualną gałąź rozwiązania.
-        self.robot_state.set_joint_group_positions(
-            self.group_name,
-            current_q,
-        )
-        self.robot_state.update()
-
-        # Calculate IK for the first point on the circle
+        # Calculate IK for the first point on the circle.
+        # Use the current configuration as the seed.
         first_q = self.solve_ik(start_pose, current_q)
 
         if first_q is None:
             self.get_logger().error(
-                "IK nie znalazło rozwiązania dla punktu startowego okręgu "
-                "przy seedzie z aktualnej konfiguracji robota. "
-                "Nie wysyłam trajektorii i kończę pracę."
+                "IK failed for the current configuration as the seed. Aborting."
             )
             self.request_clean_stop(
-                "IK nie znalazło rozwiązania dla punktu startowego okręgu "
-                "przy seedzie z aktualnej konfiguracji robota. "
-                "Nie wysyłam trajektorii i kończę pracę."
+                "IK failed for the current configuration as the seed. Aborting."
             )
             return
 
         self.robot_state.set_joint_group_positions(self.group_name, first_q)
-        self.plan_and_execute(self.robot_state)
+        if self.plan_and_execute(self.robot_state):
+            # The start-up procedure is done.
+            if self.startup_timer is not None:
+                self.startup_timer.cancel()
+                self.startup_timer = None
 
-        if self.startup_timer is not None:
-            self.startup_timer.cancel()
+            # IK seed is the current configuration.
+            self.seed_for_next_publish = first_q.copy()
 
-        self.seed_for_next_publish = first_q.copy()
+            self.initialized_from_current_state = True
 
-        # self.start_time = self.get_clock().now()
-        self.initialized_from_current_state = True
-
-        if self.startup_timer is not None:
-            self.startup_timer.cancel()
-
-        self.publish_timer = self.create_timer(
-            self.publish_period,
-            self.publish_trajectory,
-        )
-
-        # self.get_logger().info(
-        #     "Zainicjalizowano trajektorię z aktualnego stanu robota. "
-        #     f"Odległość TCP do punktu startowego okręgu: {initial_tcp_jump:.4f} m. "
-        #     # f"phase_offset: {self.phase_offset:.4f} rad."
-        # )
+            self.publish_timer = self.create_timer(
+                self.publish_period,
+                self.circular_trajectory,
+            )
+        else:
+            self.get_logger().error(
+                            "Could not plan or execute motion. Retrying."
+                        )
 
     def desired_pose(self, t: float) -> Pose:
-        """Pożądana poza TCP dla globalnego czasu trajektorii t."""
+        """Desired TCP pose fot the given relative time t."""
         phi = self.omega * t
 
         pose = Pose()
@@ -386,15 +353,14 @@ class ContinuousIkCircleTrajectoryPublisher(Node):
     def solve_ik(
         self,
         pose: Pose,
-        seed: Optional[np.ndarray],
+        seed: np.ndarray,
     ) -> Optional[np.ndarray]:
-        """Rozwiązuje IK, seedując solver poprzednią konfiguracją."""
-        if seed is not None:
-            self.robot_state.set_joint_group_positions(
-                self.group_name,
-                np.asarray(seed, dtype=float),
-            )
-            self.robot_state.update()
+        """Solves IK, using a specific seed."""
+        self.robot_state.set_joint_group_positions(
+            self.group_name,
+            np.asarray(seed, dtype=float),
+        )
+        self.robot_state.update()
 
         ok = self.robot_state.set_from_ik(
             self.group_name,
@@ -437,14 +403,14 @@ class ContinuousIkCircleTrajectoryPublisher(Node):
         now = self.get_clock().now()
         elapsed = (now - self.start_time).nanoseconds * 1e-9
 
-        # Obsługa np. resetu czasu symulacji.
+        # In case of simulation time reset.
         if elapsed < 0.0:
             self.start_time = now
             return 0.0
 
         return elapsed
 
-    def publish_trajectory(self) -> None:
+    def circular_trajectory(self) -> None:
         if not self.initialized_from_current_state:
             return
         now = self.get_clock().now()
@@ -453,6 +419,8 @@ class ContinuousIkCircleTrajectoryPublisher(Node):
         number_of_points = max(2, int(math.floor(self.horizon / self.waypoint_dt)) + 1)
 
         qs = []
+        assert not self.seed_for_next_publish is None
+
         seed = self.seed_for_next_publish
 
         for i in range(number_of_points):
@@ -474,7 +442,7 @@ class ContinuousIkCircleTrajectoryPublisher(Node):
 
         q_mat = np.vstack(qs)
 
-        # Prędkości przegubowe z różnic skończonych po ciągłej gałęzi IK.
+        # Calculate velocities.
         qdot_mat = np.gradient(q_mat, self.waypoint_dt, axis=0, edge_order=1)
         qdot_mat[-1, :] = 0.0
 
@@ -482,6 +450,7 @@ class ContinuousIkCircleTrajectoryPublisher(Node):
         traj.header.stamp = now.to_msg()
         traj.header.frame_id = self.base_frame
         traj.joint_names = self.joint_names
+        traj.points = []
 
         for i in range(number_of_points):
             point = JointTrajectoryPoint()
@@ -492,8 +461,7 @@ class ContinuousIkCircleTrajectoryPublisher(Node):
 
         self.pub_traj.publish(traj)
 
-        # Seed do następnej publikacji: konfiguracja przewidywana za publish_period,
-        # czyli blisko punktu, od którego zacznie się kolejny przesuwany horyzont.
+        # Seed for the next iteration: expected configuration after publish_period.
         next_seed_index = int(round(self.publish_period / self.waypoint_dt))
         next_seed_index = min(max(next_seed_index, 0), number_of_points - 1)
         self.seed_for_next_publish = q_mat[next_seed_index, :].copy()
@@ -507,7 +475,7 @@ class ContinuousIkCircleTrajectoryPublisher(Node):
         if self.startup_timer is not None:
             self.startup_timer.cancel()
 
-        # Zamknięcie asynchroniczne/łagodne.
+        # Shutdown.
         try:
             rclpy.try_shutdown()
         except:

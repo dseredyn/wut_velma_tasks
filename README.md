@@ -11,6 +11,7 @@ git clone -b ros2 https://github.com/RCPRG-ros-pkg/velma_robot.git
 git clone https://github.com/dseredyn/wut_velma_gazebo.git
 git clone https://github.com/dseredyn/wut_velma_effort_controller.git
 git clone https://github.com/dseredyn/wut_velma_tasks.git
+git clone https://github.com/dseredyn/wut_gazebo_models.git
 ```
 
 Build:

@@ -132,8 +132,6 @@ def execute(
 #     else:
 #         logger.error("Planning failed")
 
-
-
 class ContinuousIkCircleTrajectoryPublisher(Node):
     def __init__(self) -> None:
         super().__init__("continuous_ik_circle_trajectory_publisher")
@@ -143,8 +141,8 @@ class ContinuousIkCircleTrajectoryPublisher(Node):
         self.joint_states_topic = "/joint_states"
 
         # Names are defined in the SRDF.
-        self.group_name = "left_arm"
-        self.tip_link = "left_arm_7_link"
+        self.circle_group_name = 'left_arm'
+        self.other_group_name = 'right_arm'
         self.base_frame = "torso_base"
 
         self.center = np.array( [0.55, 0.35, 1.05], dtype=float)
@@ -170,15 +168,20 @@ class ContinuousIkCircleTrajectoryPublisher(Node):
         self.current_joint_positions = {}
         self.startup_wall_start_time = time.monotonic()
 
-        self.moveit = MoveItPy(
-            node_name="continuous_ik_circle_moveit_py",
-        )
+        self.moveit = MoveItPy(node_name='continuous_ik_circle_moveit_py')
 
         self.robot_model:RobotModel = self.moveit.get_robot_model()
-        self.joint_model_group:JointModelGroup = self.robot_model.get_joint_model_group( self.group_name )
 
         # Get joint_names from MoveIt JointModelGroup.
-        self.joint_names = list(self.joint_model_group.active_joint_model_names)
+        groups_with_one_eef = ('left_arm', 'left_arm_torso', 'right_arm', 'right_arm_torso')
+        self.joint_names_by_group:dict[str,list[str]] = {}
+        self.eef_name_by_group:dict[str,str] = {}
+        for group_name in self.robot_model.joint_model_group_names:
+            self.get_logger().info(f'Joint group: "{group_name}"')
+            joint_model_group:JointModelGroup = self.robot_model.get_joint_model_group( group_name )
+            self.joint_names_by_group[group_name] = list(joint_model_group.active_joint_model_names)
+            if group_name in groups_with_one_eef:
+                self.eef_name_by_group[group_name] = joint_model_group.eef_name
 
         self.robot_state = RobotState(self.robot_model)
         self.robot_state.set_to_default_values()
@@ -213,22 +216,24 @@ class ContinuousIkCircleTrajectoryPublisher(Node):
             self.state_move_to_initial_pose,
         )
 
-        self.get_logger().info(
-            "Publikuję ciągłe trajektorie IK na topicu "
-            f"'{self.controller_topic}' dla grupy '{self.group_name}', "
-            f"tip_link='{self.tip_link}', joint_names={self.joint_names}"
-        )
+        self.get_logger().info('Initialisation is done.')
 
-    def plan_and_execute(self, robot_state:RobotState) -> bool:
-        robot_arm:PlanningComponent = self.moveit.get_planning_component(self.group_name)
-        robot_arm.set_start_state_to_current_state()
-        robot_arm.set_goal_state(robot_state=robot_state)
+        # self.get_logger().info(
+        #     "Publikuję ciągłe trajektorie IK na topicu "
+        #     f"'{self.controller_topic}' dla grupy '{self.group_name}', "
+        #     f"tip_link='{self.tip_link}', joint_names={self.joint_names}"
+        # )
+
+    def plan_and_execute(self, group_name:str, robot_state:RobotState) -> bool:
+        pl_comp:PlanningComponent = self.moveit.get_planning_component(group_name)
+        pl_comp.set_start_state_to_current_state()
+        pl_comp.set_goal_state(robot_state=robot_state)
 
         # plan to goal
         param = PlanRequestParameters(self.moveit, '')
         param.max_acceleration_scaling_factor = 0.2
         param.max_velocity_scaling_factor = 0.2
-        trajectory = plan(robot_arm, self.get_logger(), single_plan_parameters=param)
+        trajectory = plan(pl_comp, self.get_logger(), single_plan_parameters=param)
         if trajectory is None:
             return False
         else:
@@ -242,11 +247,10 @@ class ContinuousIkCircleTrajectoryPublisher(Node):
         for name, position in zip(msg.name, msg.position):
             self.current_joint_positions[name] = position
 
-    def get_current_group_positions(self) -> Optional[np.ndarray]:
+    def get_group_positions(self, group_name:str) -> Optional[np.ndarray]:
         q = []
-
         missing = []
-        for joint_name in self.joint_names:
+        for joint_name in self.joint_names_by_group[group_name]:
             if joint_name not in self.current_joint_positions:
                 missing.append(joint_name)
             else:
@@ -254,22 +258,23 @@ class ContinuousIkCircleTrajectoryPublisher(Node):
 
         if missing:
             self.get_logger().debug(
-                "Czekam na joint_states dla: " + ", ".join(missing)
+                "Waiting for joint_states for: " + ", ".join(missing)
             )
             return None
 
         return np.asarray(q, dtype=float)
 
-    def get_current_tcp_position(self) -> Optional[np.ndarray]:
+    def get_current_tcp_position(self, group_name:str) -> Optional[np.ndarray]:
+        tip_link = self.eef_name_by_group[group_name]
         try:
             transform = self.tf_buffer.lookup_transform(
                 self.base_frame,
-                self.tip_link,
+                tip_link,
                 Time(),
             )
         except TransformException as ex:
             self.get_logger().debug(
-                f"Czekam na TF {self.base_frame} -> {self.tip_link}: {ex}"
+                f"Czekam na TF {self.base_frame} -> {tip_link}: {ex}"
             )
             return None
 
@@ -287,14 +292,14 @@ class ContinuousIkCircleTrajectoryPublisher(Node):
 
         elapsed = time.monotonic() - self.startup_wall_start_time
 
-        current_q = self.get_current_group_positions()
-        current_tcp = self.get_current_tcp_position()
+        current_q = self.get_group_positions(self.circle_group_name)
+        current_tcp = self.get_current_tcp_position(self.circle_group_name)
 
         if current_q is None or current_tcp is None:
             if elapsed > self.startup_timeout:
                 self.request_clean_stop(
                     "Could not get the current state from /joint_states "
-                    f"and TF {self.base_frame} -> {self.tip_link} is {elapsed:.1f}s > "
+                    f"and TF in {elapsed:.1f}s > "
                     f"{self.startup_timeout:.1f} s. Aborting."
                 )
             return
@@ -303,7 +308,7 @@ class ContinuousIkCircleTrajectoryPublisher(Node):
 
         # Calculate IK for the first point on the circle.
         # Use the current configuration as the seed.
-        first_q = self.solve_ik(start_pose, current_q)
+        first_q = self.solve_ik(self.circle_group_name, start_pose, current_q)
 
         if first_q is None:
             self.get_logger().error(
@@ -314,8 +319,12 @@ class ContinuousIkCircleTrajectoryPublisher(Node):
             )
             return
 
-        self.robot_state.set_joint_group_positions(self.group_name, first_q)
-        if self.plan_and_execute(self.robot_state):
+        self.robot_state.set_joint_group_positions(self.circle_group_name, first_q)
+
+        q_other = np.radians([33, -99, 46, 96, 0, 13, -90])
+        self.robot_state.set_joint_group_positions(self.other_group_name, q_other)
+
+        if self.plan_and_execute('arms', self.robot_state):
             # The start-up procedure is done.
             if self.startup_timer is not None:
                 self.startup_timer.cancel()
@@ -350,22 +359,21 @@ class ContinuousIkCircleTrajectoryPublisher(Node):
         pose.orientation.w = float(self.orientation_xyzw[3])
         return pose
 
-    def solve_ik(
-        self,
-        pose: Pose,
-        seed: np.ndarray,
-    ) -> Optional[np.ndarray]:
+    def solve_ik(self, group_name:str, pose:Pose, seed:np.ndarray) -> Optional[np.ndarray]:
         """Solves IK, using a specific seed."""
+        assert seed.shape[0] == len(self.joint_names_by_group[group_name])
+        tip_link = self.eef_name_by_group[group_name]
+
         self.robot_state.set_joint_group_positions(
-            self.group_name,
+            group_name,
             np.asarray(seed, dtype=float),
         )
         self.robot_state.update()
 
         ok = self.robot_state.set_from_ik(
-            self.group_name,
+            group_name,
             pose,
-            self.tip_link,
+            tip_link,
             self.ik_timeout,
         )
 
@@ -374,7 +382,7 @@ class ContinuousIkCircleTrajectoryPublisher(Node):
 
         self.robot_state.update()
         q = np.asarray(
-            self.robot_state.get_joint_group_positions(self.group_name),
+            self.robot_state.get_joint_group_positions(group_name),
             dtype=float,
         )
 
@@ -428,7 +436,7 @@ class ContinuousIkCircleTrajectoryPublisher(Node):
             t_abs = t0 + t_rel
 
             pose = self.desired_pose(t_abs)
-            q = self.solve_ik(pose, seed)
+            q = self.solve_ik(self.circle_group_name, pose, seed)
 
             if q is None:
                 self.get_logger().warn(
@@ -449,7 +457,7 @@ class ContinuousIkCircleTrajectoryPublisher(Node):
         traj = JointTrajectory()
         traj.header.stamp = now.to_msg()
         traj.header.frame_id = self.base_frame
-        traj.joint_names = self.joint_names
+        traj.joint_names = self.joint_names_by_group[self.circle_group_name]
         traj.points = []
 
         for i in range(number_of_points):

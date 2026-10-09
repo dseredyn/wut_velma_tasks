@@ -35,13 +35,6 @@ def generate_launch_description():
             moveit_config.to_dict(),
             {
                 "use_sim_time": use_sim_time,
-
-                # "center_xyz": [0.45, 0.20, 0.45],
-                # "radius": 0.03,
-                # "period": 8.0,
-                # "publish_period": 0.5,
-                # "horizon": 2.0,
-                # "waypoint_dt": 0.1,
             },
         ],
     )

@@ -258,8 +258,8 @@ class GraspingNode(Node):
         pl_O = PyKDL.Vector(-0.5, 0.35, 1)
         pr_O = PyKDL.Vector(0.5, 0.35, 1)
     
-        pl_B = T_B_O * pl_O + PyKDL.Vector(0, 0, 0.3)
-        pr_B = T_B_O * pr_O + PyKDL.Vector(0, 0, 0.3)
+        pl_B = T_B_O * pl_O + PyKDL.Vector(0, 0, 0.15)
+        pr_B = T_B_O * pr_O + PyKDL.Vector(0, 0, 0.15)
 
         goal = FollowEquilibriumTrajectory.Goal()
         goal.header.frame_id = 'world'

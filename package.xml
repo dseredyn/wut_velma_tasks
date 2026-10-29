@@ -2,12 +2,14 @@
 <package format="3">
   <name>wut_velma_tasks</name>
   <version>0.0.1</version>
-  <description>Python scripts and programs for commanding WUT Velma.</description>
+  <description>Package for WUT Velma tasks.</description>
 
   <maintainer email="dawid.seredynski@pw.edu.pl">Dawid Seredyński</maintainer>
+  <author email="dawid.seredynski@pw.edu.pl">Dawid Seredyński</author>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
 
   <!-- Build / link deps -->
   <depend>rclcpp</depend>
@@ -29,10 +31,13 @@
   <depend>orocos_kdl</depend>
   <depend>urdf</depend>
 
-  <depend>pinocchio</depend>
-
   <depend>rcutils</depend>
 
+  <depend>gazebo_point_springs</depend>
+  <depend>gazebo_point_springs_interfaces</depend>
+  <depend>gazebo_pose_interfaces</depend>
+
+  <exec_depend>rclpy</exec_depend>
   <export>
     <build_type>ament_cmake</build_type>
   </export>

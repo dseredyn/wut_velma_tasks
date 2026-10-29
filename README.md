@@ -26,10 +26,16 @@ clear && python3 -m colcon build --symlink-install --cmake-args -DCMAKE_EXPORT_C
 
 Simulation + control system:
 ```bash
-ros2 launch wut_velma_gazebo start_system.launch.py
+ros2 launch wut_velma_gazebo start_system.launch.py world:=table_mov_human.world
 ```
 
 Motion generation:
 ```bash
 ros2 launch wut_velma_tasks circle_trajectory.launch.py
 ```
+
+Example script:
+```bash
+ros2 run wut_velma_tasks table_grasp_node.py --ros-args -p use_sim_time:=true
+```
+

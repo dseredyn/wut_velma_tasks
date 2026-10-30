@@ -45,6 +45,7 @@ install(PROGRAMS
   scripts/grasping_node.py
   scripts/table_grasp_node.py
   scripts/table_human_node.py
+  scripts/table_human_interactive_node.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

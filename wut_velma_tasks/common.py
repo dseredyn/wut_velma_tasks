@@ -15,7 +15,7 @@ from rclpy.action import ActionClient
 from rclpy.duration import Duration
 
 from std_msgs.msg import Header
-from geometry_msgs.msg import Pose, Transform, TransformStamped, Vector3, Quaternion
+from geometry_msgs.msg import Point, Pose, Transform, TransformStamped, Vector3, Quaternion
 from moveit_msgs.msg import (PositionConstraint, OrientationConstraint, BoundingVolume,
                              PlanningScene)
 from shape_msgs.msg import SolidPrimitive
@@ -100,10 +100,12 @@ def poseKDLtoROS(T:PyKDL.Frame) -> Pose:
 def vectorKDLtoROS(v:PyKDL.Vector) -> Vector3:
     return Vector3(x=v.x(), y=v.y(), z=v.z())
 
+def pointROStoKDL(p:Point) -> PyKDL.Vector:
+    return PyKDL.Vector(p.x, p.y, p.z)
+
 def poseRosToKDL(p:Pose) -> PyKDL.Frame:
-    pos = PyKDL.Vector(p.position.x, p.position.y, p.position.z)
     q = PyKDL.Rotation.Quaternion(p.orientation.x, p.orientation.y, p.orientation.z, p.orientation.w)
-    return PyKDL.Frame(q, pos)
+    return PyKDL.Frame(q, pointROStoKDL(p.position))
 
 def quaternionKDLtoROS(M:PyKDL.Rotation) -> Quaternion:
     x, y, z, w = M.GetQuaternion()
@@ -438,3 +440,53 @@ class ArmsTorsoActionInterface:
                                         f'error_code={response.result.error_code}, '
                                         f'error_string={response.result.error_string}')
                 return False
+
+
+
+from moveit_msgs.srv import (GetCartesianPath, GetCartesianPath_Request,
+                GetCartesianPath_Response)
+
+class GetCartesianPathInterface:
+    def __init__(self, node:Node):
+        self.node = node
+        self.cart_path_cli = self.node.create_client(GetCartesianPath, '/compute_cartesian_path')
+        while not self.cart_path_cli.wait_for_service(timeout_sec=1.0):
+            self.node.get_logger().info('service /compute_cartesian_path not available, waiting again...')
+
+    def call_async(self, req:GetCartesianPath_Request) -> Future:
+        final_future = Future()
+
+        def result_received(future):
+            try:
+                final_future.set_result(future.result())
+            except Exception as exc:
+                final_future.set_exception(exc)
+
+        self.cart_path_cli.call_async(req).add_done_callback(result_received)
+        return final_future
+
+    
+    def wait_for_result(self, future:Future) -> GetCartesianPath_Response | None:
+        finished = Event()
+
+        # Callback zostanie wykonany również wtedy, gdy future już się zakończył.
+        future.add_done_callback(lambda _: finished.set())
+        finished.wait()
+
+        if future.done():
+            response:GetCartesianPath_Response|None = future.result()
+            return response
+        return None
+
+            # if response is None:
+            #     raise RuntimeError("Nie otrzymano wyniku serwisu")
+            # if (response.status == GoalStatus.STATUS_SUCCEEDED
+            #         and response.result.error_code
+            #             == FollowJointTrajectory.Result.SUCCESSFUL):
+            #     self.node.get_logger().info(f'move_fingers succeeded')
+            #     return True
+            # else:
+            #     self.node.get_logger().error(f'move_fingers error: status={response.status}, '
+            #                             f'error_code={response.result.error_code}, '
+            #                             f'error_string={response.result.error_string}')
+            #     return False

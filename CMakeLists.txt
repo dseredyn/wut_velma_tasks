@@ -25,6 +25,7 @@ find_package(rcutils REQUIRED)
 find_package(kdl_parser REQUIRED)
 find_package(orocos_kdl REQUIRED)
 find_package(tf2_ros REQUIRED)
+find_package(cartesian_impedance_msgs REQUIRED)
 
 ament_export_dependencies(
   controller_interface
@@ -35,6 +36,7 @@ ament_export_dependencies(
   rclcpp_lifecycle
   realtime_tools
   trajectory_msgs
+  cartesian_impedance_msgs
 )
 
 ament_python_install_package(${PROJECT_NAME})
@@ -44,8 +46,10 @@ install(PROGRAMS
   scripts/example_node.py
   scripts/grasping_node.py
   scripts/table_grasp_node.py
+  scripts/table_grasp_imp_node.py
   scripts/table_human_node.py
   scripts/table_human_interactive_node.py
+  scripts/test_cart_imp_node.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

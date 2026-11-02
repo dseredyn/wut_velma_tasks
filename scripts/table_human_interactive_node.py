@@ -77,7 +77,7 @@ class InteractiveMarkerServerInterface:
         cube = Marker()
         cube.type = Marker.CUBE
         cube.pose = poseKDLtoROS(PyKDL.Frame())
-        cube.scale = Vector3(x=width, y=0.1, z=0.1)
+        cube.scale = Vector3(x=width, y=0.01, z=0.01)
         cube.color = ColorRGBA(r=0.5, g=0.5, b=0.5, a=1.0)
 
         visual = InteractiveMarkerControl()
@@ -183,6 +183,8 @@ class HumanNode(Node):
         self.int_markers = None
         self.gz_pose_thr = GazeboPoseThr(self, ['can', 'table'])
         self.human_int = TableHumanInterface(self)
+
+        self.prev_pts = None
 
         # Visual marker publisher
         self.publisher_vis = self.create_publisher(MarkerArray, '/task_markers', 10)
@@ -295,9 +297,22 @@ class HumanNode(Node):
             return self.state_lift_table
         # else:
 
-        # T_B_M = self.int_markers.getPose()
         pl_B, pr_B = self.int_markers.getPoints()
 
+        # Calculate movement time
+        max_speed = 0.1 # m/s
+
+        if self.prev_pts is None:
+            diff_l = PyKDL.Vector()
+            diff_r = PyKDL.Vector()
+        else:
+            diff_l = pl_B - self.prev_pts[0]
+            diff_r = pr_B - self.prev_pts[1]
+        self.prev_pts = (pl_B, pr_B)
+
+        max_dist = max( diff_l.Norm(), diff_r.Norm() )
+
+        mov_time = max(0.2, max_dist / max_speed)
 
         obj_name = 'table'
         T_B_O = self.gz_pose_thr.getObjectPose(obj_name)
@@ -305,16 +320,10 @@ class HumanNode(Node):
             self.get_logger().info(f'Could not get pose of object "{obj_name}"')
             return self.state_lift_table
 
-        # pl_O = PyKDL.Vector(-0.5, 0.35, 1)
-        # pr_O = PyKDL.Vector(0.5, 0.35, 1)
-    
-        # pl_B = T_B_O * pl_O + PyKDL.Vector(0, 0, 0.15)
-        # pr_B = T_B_O * pr_O + PyKDL.Vector(0, 0, 0.15)
-
         goal = FollowEquilibriumTrajectory.Goal()
         goal.header.frame_id = 'world'
         goal.point_names = ['hand_left', 'hand_right']
-        goal.points = [EquilibriumWaypoint(time_from_start=Duration(seconds=3).to_msg(),
+        goal.points = [EquilibriumWaypoint(time_from_start=Duration(seconds=mov_time).to_msg(),
                                            positions=[Point(x=pl_B.x(), y=pl_B.y(), z=pl_B.z()),
                                                       Point(x=pr_B.x(), y=pr_B.y(), z=pr_B.z())])]
 

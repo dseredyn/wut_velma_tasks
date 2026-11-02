@@ -66,6 +66,11 @@ from cartesian_impedance_msgs.msg import CartesianTrajectoryPoint
 
 from controller_manager_msgs.srv import SwitchController, ListControllers
 
+def secondsToDuration(t:float) -> Duration:
+    sec = int(math.floor(t))
+    nanosec = int((t - sec)*1_000_000_000)
+    return Duration(sec=sec, nanosec=nanosec )
+
 def combineTrajectories(
     t0: JointTrajectory,
     t1: JointTrajectory,
@@ -647,6 +652,17 @@ class TaskNode(Node):
         T_B_Cl_d = PyKDL.Frame(T_B_Cl.M, PyKDL.Vector(T_B_Cl.p.x(), T_B_Cl.p.y(), self.support_task_params.height_eq))
         T_B_El_d = T_B_Cl_d * self.support_task_params.T_El_C.Inverse()
 
+        # Calculate movement time
+        # m/s, rad/s
+        max_lin_v = 0.1
+        max_rot_v = math.radians(30)
+        diff_r = PyKDL.diff(T_B_Er_d, T_B_Er)
+        diff_l = PyKDL.diff(T_B_El_d, T_B_El)
+        mov_time = max(0.1, diff_r.vel.Norm() / max_lin_v, diff_l.vel.Norm() / max_lin_v,
+                            diff_r.rot.Norm() / max_rot_v, diff_l.rot.Norm() / max_rot_v)
+
+        dur = secondsToDuration(mov_time)
+
         # if self.support_task_params.js_previous is None:
         #     self.support_task_params.js_previous = js
 
@@ -654,12 +670,12 @@ class TaskNode(Node):
         goal.ee_traj_r.header.frame_id = 'torso_base'
         goal.ee_traj_r.target_frame = 'right_arm_7_link'
         goal.ee_traj_r.points = [CartesianTrajectoryPoint(
-                    time_from_start=Duration(sec=1, nanosec=0), pose = poseKDLtoROS(T_B_Er_d))]
+                    time_from_start=dur, pose = poseKDLtoROS(T_B_Er_d))]
 
         goal.ee_traj_l.header.frame_id = 'torso_base'
         goal.ee_traj_l.target_frame = 'left_arm_7_link'
         goal.ee_traj_l.points = [CartesianTrajectoryPoint(
-                    time_from_start=Duration(sec=1, nanosec=0), pose = poseKDLtoROS(T_B_El_d))]
+                    time_from_start=dur, pose = poseKDLtoROS(T_B_El_d))]
 
         # Visualization
         T_B_Cr_act = T_B_Er * self.support_task_params.T_Er_C

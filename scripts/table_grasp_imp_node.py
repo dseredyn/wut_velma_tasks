@@ -519,7 +519,7 @@ class TaskNode(Node):
     def state_move_to_table(self) -> FsmState:
         self.cm_int.trySwitchTo(ControlMode.JNT_IMP)
 
-        T_E_F, js, T_B_O, _, _ = self.getWorldState()
+        T_E_F, _, T_B_O, _, _ = self.getWorldState()
 
         # The contact frame C wrt E
         T_E_C = T_E_F * PyKDL.Frame(PyKDL.Vector(0.05, 0, 0))
@@ -597,7 +597,10 @@ class TaskNode(Node):
 
         self.cm_int.trySwitchTo(ControlMode.CART_IMP)
 
-        _, js, T_B_O, T_B_El, T_B_Er = self.getWorldState()
+        # TODO: set stiffness in the code: linear: 100, rotational: 50
+        # TODO: add preferred joint state
+
+        _, _, T_B_O, T_B_El, T_B_Er = self.getWorldState()
 
         pt_ref_B = T_B_O * self.support_task_params.pt_ref_O
         height_reference = pt_ref_B.z()
@@ -612,7 +615,7 @@ class TaskNode(Node):
             self.support_task_params.height_eq = height_reference
 
         height_tol = 0.01
-        max_height_change = 0.02
+        max_height_change = 0.03
         max_height_dist = 0.2
 
         if height_current < height_reference - height_tol:
@@ -636,14 +639,7 @@ class TaskNode(Node):
                                f' current: {height_current:.2f},'
                                f' equilibrium: {self.support_task_params.height_eq:.2f}')
 
-        # TODO: do this once:
-        req2:ApplyPlanningScene_Request = ApplyPlanningScene.Request()
-        req2.scene = planningSceneRemoveObjects(['table.top'])
-        result2:ApplyPlanningScene_Response|None = self.planning_scene_cli.call(req2)
-        if result2 is None:
-            self.get_logger().error(f'Service call failed')
-            return self.state_failure
-
+        assert not self.support_task_params.T_Er_C is None and not self.support_task_params.T_El_C is None
         T_B_Cr = T_B_O * self.support_task_params.T_O_Cr
         T_B_Cr_d = PyKDL.Frame(T_B_Cr.M, PyKDL.Vector(T_B_Cr.p.x(), T_B_Cr.p.y(), self.support_task_params.height_eq))
         T_B_Er_d = T_B_Cr_d * self.support_task_params.T_Er_C.Inverse()
@@ -656,15 +652,13 @@ class TaskNode(Node):
         # m/s, rad/s
         max_lin_v = 0.1
         max_rot_v = math.radians(30)
+        min_time = 0.1
         diff_r = PyKDL.diff(T_B_Er_d, T_B_Er)
         diff_l = PyKDL.diff(T_B_El_d, T_B_El)
-        mov_time = max(0.1, diff_r.vel.Norm() / max_lin_v, diff_l.vel.Norm() / max_lin_v,
-                            diff_r.rot.Norm() / max_rot_v, diff_l.rot.Norm() / max_rot_v)
+        mov_time = max(min_time, diff_r.vel.Norm() / max_lin_v, diff_l.vel.Norm() / max_lin_v,
+                                    diff_r.rot.Norm() / max_rot_v, diff_l.rot.Norm() / max_rot_v)
 
         dur = secondsToDuration(mov_time)
-
-        # if self.support_task_params.js_previous is None:
-        #     self.support_task_params.js_previous = js
 
         goal = FollowCartesianImpedanceTrajectory.Goal()
         goal.ee_traj_r.header.frame_id = 'torso_base'
@@ -712,7 +706,6 @@ class TaskNode(Node):
 
         self.publisher_vis.publish(msg)
 
-
         # Waits until goal is accepted
         response = self.move_cart_action.send_goal(goal)
         if response is None:
@@ -729,61 +722,6 @@ class TaskNode(Node):
         else:
             return self.state_failure
 
-        raise Exception('unreachable code')
-        # TODO: remove:
-
-
-
-        # right
-        req = GetCartesianPath_Request(group_name='right_arm', link_name='right_arm_7_link',
-                                       waypoints=[poseKDLtoROS(T_B_Er_d)], max_step=0.01,
-                                       avoid_collisions=True, max_velocity_scaling_factor=0.4,
-                                       max_acceleration_scaling_factor=0.4)
-        req.start_state.joint_state = self.support_task_params.js_previous
-        req.start_state.is_diff = False
-        fut_r = self.cart_path_int.call_async(req)
-
-        # left
-        req = GetCartesianPath_Request(group_name='left_arm', link_name='left_arm_7_link',
-                                       waypoints=[poseKDLtoROS(T_B_El_d)], max_step=0.01,
-                                       avoid_collisions=True, max_velocity_scaling_factor=0.4,
-                                       max_acceleration_scaling_factor=0.4)
-        req.start_state.joint_state = self.support_task_params.js_previous
-        req.start_state.is_diff = False
-        fut_l = self.cart_path_int.call_async(req)
-
-        # Get results
-        result_r = self.cart_path_int.wait_for_result(fut_r)
-        result_l = self.cart_path_int.wait_for_result(fut_l)
-
-        self.get_logger().info(f'fractions: {result_l.fraction:.2f}, {result_r.fraction:.2f}')
-
-        js = JointState()
-        js.name = result_r.solution.joint_trajectory.joint_names
-        last_q:JointTrajectoryPoint = result_r.solution.joint_trajectory.points[-1]
-        js.position = last_q.positions
-
-        self.support_task_params.js_previous = updateJointState(self.support_task_params.js_previous, js) #, 'right_arm_torso')
-        traj_r = result_r.solution.joint_trajectory
-
-        js = JointState()
-        js.name = result_l.solution.joint_trajectory.joint_names
-        last_q:JointTrajectoryPoint = result_l.solution.joint_trajectory.points[-1]
-        js.position = last_q.positions
-        self.support_task_params.js_previous = updateJointState(self.support_task_params.js_previous, js) #, 'left_arm')
-        traj_l = result_l.solution.joint_trajectory
-
-        # self.get_logger().info(f'r: len: {len(traj_r.points)}, t0: {traj_r.points[0].time_from_start}')
-        # self.get_logger().info(f'ss: {result_r.start_state.joint_state.position}')
-        # self.get_logger().info(f'p0: {traj_r.points[0].positions}')
-
-
-
-        # Execute trajectories
-        traj = combineTrajectories(traj_r, traj_l)
-        self.arms_torso_int.move(traj, 0.1)
-
-        return self.state_support
 
     #
     # TF
@@ -829,9 +767,6 @@ class SupportTaskParams:
         # State:
         # Height equilibrium point
         self.height_eq = None
-
-        # Previous js, used to continue motion
-        # self.js_previous = None
 
 
 def main(args=None) -> None:
